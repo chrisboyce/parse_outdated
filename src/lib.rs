@@ -41,7 +41,6 @@ pub struct OutdatedDepBuilder {
 #[derive(Debug)]
 enum ParseState {
     Start,
-    InWorkspaceTitle,
     InWorkspaceBreak,
     InHeader,
     InRow,
@@ -60,41 +59,18 @@ impl OutdatedResult {
             .map(|s| s.trim())
             .collect::<Vec<&str>>();
         let mut cur_deps: Vec<OutdatedDep> = vec![];
-        let mut workspec_deps: Vec<(String, Vec<OutdatedDep>)> = vec![];
+        let mut workspace_deps: Vec<(String, Vec<OutdatedDep>)> = vec![];
         let mut state: Result<ParseState> = Ok(ParseState::Start);
         let mut cur_outdated_dep = OutdatedDepBuilder::default();
         let mut workspace_name: Option<String> = None;
         let mut column_indices: Vec<usize> = vec![];
 
         for line in lines {
-            // println!("current line\n{}", line);
-            // println!("Current state\n{:#?}", &state);
-            // println!("Current colum indices\n{:#?}", column_indices);
             state = match state? {
-                ParseState::Start | ParseState::InWorkspaceTitle => {
+                ParseState::Start => {
                     // cur_outdated_dep.name = Some(line.to_owned());
                     if workspace_name.is_some() {
-                        workspec_deps.push((workspace_name.clone().unwrap(), cur_deps.clone()));
-                        // cur_deps.push(
-                        //     OutdatedDep {
-                        //                 name: cur_outdated_dep
-                        //                     .name
-                        //                     .ok_or(anyhow!("Parsed data is missing a value for 'name'"))?,
-                        //                 kind: cur_outdated_dep
-                        //                     .kind
-                        //                     .ok_or(anyhow!("Parsed data is missing a value for 'kind'"))?,
-                        //                 latest_version: cur_outdated_dep.latest_version.ok_or(anyhow!(
-                        //                     "Parsed data is missing a value for 'latest version'"
-                        //                 ))?,
-                        //                 project_version: cur_outdated_dep.project_version.ok_or(anyhow!(
-                        //                     "Parsed data is missing a value for 'project version'"
-                        //                 ))?,
-                        //                 platform: cur_outdated_dep.platform,
-                        //                 latest_compatible_version: cur_outdated_dep.latest_compatible_version,
-                        //             }
-                        //
-                        //
-                        // );
+                        workspace_deps.push((workspace_name.clone().unwrap(), cur_deps.clone()));
                     }
                     column_indices = vec![];
                     workspace_name = Some(line.to_owned());
@@ -171,7 +147,7 @@ impl OutdatedResult {
                                         "Development" => Ok(DepKind::Development),
                                         "Build" => Ok(DepKind::Build),
                                         _ => Err(anyhow!(
-                                            "Unknown depdendency kind [{}]",
+                                            "Unknown dependency kind [{}]",
                                             value.to_owned()
                                         )),
                                     }?;
@@ -213,46 +189,11 @@ impl OutdatedResult {
             }
         }
 
-        workspec_deps.push((workspace_name.clone().unwrap(), cur_deps.clone()));
-        // deps.push((
-        //     workspace_name
-        //         .ok_or(anyhow!(
-        //             "Parsed data is missing a value for 'workspace name'"
-        //         ))?
-        //         .to_owned(),
-        //     vec![OutdatedDep {
-        //         name: cur_outdated_dep
-        //             .name
-        //             .ok_or(anyhow!("Parsed data is missing a value for 'name'"))?,
-        //         kind: cur_outdated_dep
-        //             .kind
-        //             .ok_or(anyhow!("Parsed data is missing a value for 'kind'"))?,
-        //         latest_version: cur_outdated_dep.latest_version.ok_or(anyhow!(
-        //             "Parsed data is missing a value for 'latest version'"
-        //         ))?,
-        //         project_version: cur_outdated_dep.project_version.ok_or(anyhow!(
-        //             "Parsed data is missing a value for 'project version'"
-        //         ))?,
-        //         platform: cur_outdated_dep.platform,
-        //         latest_compatible_version: cur_outdated_dep.latest_compatible_version,
-        //     }],
-        // ));
+        workspace_deps.push((workspace_name.clone().unwrap(), cur_deps.clone()));
         Ok(OutdatedResult {
-            projects: workspec_deps,
+            projects: workspace_deps,
         })
     }
-    // if cur_outdated_dep.kind.is_none(){
-    //     Err(anyhow!("Parsed data is missing a 'kind'"))
-    // }
-    // if cur_outdated_dep.name.is_none(){
-    //     Err(anyhow!("Parsed data is missing a 'name'"))
-    // }
-    // if cur_outdated_dep.project_version.is_none(){
-    //     Err(anyhow!("Parsed data is missing a 'project version'"))
-    // }
-    // if cur_outdated_dep.latest_version.is_none(){
-    //     Err(anyhow!("Parsed data is missing a 'latest version'"))
-    // }
 }
 
 #[cfg(test)]
@@ -290,7 +231,6 @@ pkg-config       0.3.8    0.3.9   0.3.9    Build        ---
 term             0.4.5    ---     0.4.6    Normal       ---
 term_size->libc  0.2.18   0.2.29  0.2.29   Normal       cfg(not(target_os = "windows")) 
         "#;
-        let o = OutdatedResult::try_from(output).unwrap();
-        dbg!(o);
+        OutdatedResult::try_from(output).unwrap();
     }
 }

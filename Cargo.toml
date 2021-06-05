@@ -2,8 +2,12 @@
 name = "parse_outdated"
 authors = ["Chris Boyce <chrisboyce@pm.me>"]
 license = "Apache-2.0"
+homepage = "https://github.com/chrisboyce/parse_outdated"
+repository = "https://github.com/chrisboyce/parse_outdated"
 version = "0.1.0"
 edition = "2018"
+description = "Parses the output from the `cargo-oudated` crate"
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
