@@ -1,28 +1,31 @@
 use anyhow::{anyhow, Result};
-use thiserror::Error;
 
+#[derive(Clone, Debug)]
 pub enum DepKind {
     Normal,
     Development,
     Build,
 }
 
+#[derive(Clone, Debug)]
 pub enum LatestVersion {
     V(String),
     Removed,
 }
 
+#[derive(Clone, Debug)]
 pub struct OutdatedResult {
     projects: Vec<(String, Vec<OutdatedDep>)>,
 }
 
+#[derive(Clone, Debug)]
 pub struct OutdatedDep {
-    name: String,
-    project_version: String,
-    latest_compatible_version: Option<String>,
-    latest_version: LatestVersion,
-    kind: DepKind,
-    platform: Option<String>,
+    pub name: String,
+    pub project_version: String,
+    pub latest_compatible_version: Option<String>,
+    pub latest_version: LatestVersion,
+    pub kind: DepKind,
+    pub platform: Option<String>,
 }
 
 #[derive(Default)]
@@ -46,19 +49,54 @@ enum ParseState {
 }
 
 impl OutdatedResult {
+    pub fn get_workspaces(&self) -> &Vec<(String, Vec<OutdatedDep>)> {
+        &self.projects
+    }
+
     pub fn try_from(output: &str) -> Result<Self> {
-        let lines = output.split("\n");
-        let mut deps = vec![];
+        let lines = output
+            .split("\n")
+            .into_iter()
+            .map(|s| s.trim())
+            .collect::<Vec<&str>>();
+        let mut cur_deps: Vec<OutdatedDep> = vec![];
+        let mut workspec_deps: Vec<(String, Vec<OutdatedDep>)> = vec![];
         let mut state: Result<ParseState> = Ok(ParseState::Start);
         let mut cur_outdated_dep = OutdatedDepBuilder::default();
         let mut workspace_name: Option<String> = None;
+        let mut column_indices: Vec<usize> = vec![];
 
-        for line in lines.collect::<Vec<&str>>() {
-            println!("current line\n{}", line);
-            println!("Current state\n{:#?}", &state);
+        for line in lines {
+            // println!("current line\n{}", line);
+            // println!("Current state\n{:#?}", &state);
+            // println!("Current colum indices\n{:#?}", column_indices);
             state = match state? {
                 ParseState::Start | ParseState::InWorkspaceTitle => {
                     // cur_outdated_dep.name = Some(line.to_owned());
+                    if workspace_name.is_some() {
+                        workspec_deps.push((workspace_name.clone().unwrap(), cur_deps.clone()));
+                        // cur_deps.push(
+                        //     OutdatedDep {
+                        //                 name: cur_outdated_dep
+                        //                     .name
+                        //                     .ok_or(anyhow!("Parsed data is missing a value for 'name'"))?,
+                        //                 kind: cur_outdated_dep
+                        //                     .kind
+                        //                     .ok_or(anyhow!("Parsed data is missing a value for 'kind'"))?,
+                        //                 latest_version: cur_outdated_dep.latest_version.ok_or(anyhow!(
+                        //                     "Parsed data is missing a value for 'latest version'"
+                        //                 ))?,
+                        //                 project_version: cur_outdated_dep.project_version.ok_or(anyhow!(
+                        //                     "Parsed data is missing a value for 'project version'"
+                        //                 ))?,
+                        //                 platform: cur_outdated_dep.platform,
+                        //                 latest_compatible_version: cur_outdated_dep.latest_compatible_version,
+                        //             }
+                        //
+                        //
+                        // );
+                    }
+                    column_indices = vec![];
                     workspace_name = Some(line.to_owned());
                     Ok(ParseState::InWorkspaceBreak)
                 }
@@ -70,10 +108,25 @@ impl OutdatedResult {
                     }
                 }
                 ParseState::InHeader => {
+                    let columns = vec!["Name", "Project", "Compat", "Latest", "Kind", "Platform"];
                     let parts = line.split_whitespace().collect::<Vec<&str>>();
-                    if parts != vec!["Name", "Project", "Compat", "Latest", "Kind", "Platform"] {
+                    if parts != columns {
                         Err(anyhow!("Expected header row, got [{}]", line))
                     } else {
+                        // Extract the column indices so we can fetch the values
+                        // once we're looking at the rows
+                        for column in columns {
+                            let i: (usize, &str) = line
+                                .match_indices(column)
+                                .into_iter()
+                                .nth(0)
+                                .ok_or(anyhow!(
+                                "Expected to get an index for `{}` but none was found in line [{}]",
+                                column,
+                                line
+                            ))?;
+                            column_indices.push(i.0);
+                        }
                         Ok(ParseState::InHeaderBreak)
                     }
                 }
@@ -82,88 +135,124 @@ impl OutdatedResult {
                     if line == "" {
                         Ok(ParseState::Start)
                     } else {
-                        // This assumes that none of the rows have values which
-                        // themselves have white space
-                        let values = line.split_whitespace().collect::<Vec<&str>>();
-                        if values.len() != 6 {
-                            Err(anyhow!(
-                                "Expected row [{}] to have 6 values, but it has [{}]",
-                                &line,
-                                line.len()
-                            ))
-                        } else {
-                            cur_outdated_dep.name = Some(values[0].to_owned());
-                            cur_outdated_dep.project_version = Some(values[1].to_owned());
-
-                            cur_outdated_dep.latest_compatible_version = match values[2] {
-                                "---" => None,
-                                _ => Some(values[2].to_owned()),
+                        for (i, start) in column_indices.iter().enumerate() {
+                            // Fetch the value for the current column in the current row
+                            let value = if i == 5 {
+                                // If the current index is the last one, just
+                                // grab the rest of the text
+                                line[start.clone()..].trim()
+                            } else {
+                                // Otherwise, grab the text up to the next column
+                                line[start.clone()..column_indices[i + 1]].trim()
                             };
 
-                            cur_outdated_dep.latest_version = Some(match values[3] {
-                                "Removed" => LatestVersion::Removed,
-                                _ => LatestVersion::V(values[3].to_owned()),
-                            });
-
-                            let dep_kind = match values[4] {
-                                "Normal" => Ok(DepKind::Normal),
-                                "Development" => Ok(DepKind::Development),
-                                "Build" => Ok(DepKind::Build),
-                                _ => Err(anyhow!(
-                                    "Unknown depdendency kind [{}]",
-                                    values[4].to_owned()
-                                )),
-                            }?;
-                            cur_outdated_dep.kind = Some(dep_kind);
-                            cur_outdated_dep.platform = match values[5] {
-                                "---" => None,
-                                _ => Some(line.to_owned()),
-                            };
-                            Ok(ParseState::InRow)
+                            match i {
+                                0 => {
+                                    cur_outdated_dep.name = Some(value.to_owned());
+                                }
+                                1 => {
+                                    cur_outdated_dep.project_version = Some(value.to_owned());
+                                }
+                                2 => {
+                                    cur_outdated_dep.latest_compatible_version = match value {
+                                        "---" => None,
+                                        _ => Some(value.to_owned()),
+                                    };
+                                }
+                                3 => {
+                                    cur_outdated_dep.latest_version = Some(match value {
+                                        "Removed" => LatestVersion::Removed,
+                                        _ => LatestVersion::V(value.to_owned()),
+                                    });
+                                }
+                                4 => {
+                                    let dep_kind = match value {
+                                        "Normal" => Ok(DepKind::Normal),
+                                        "Development" => Ok(DepKind::Development),
+                                        "Build" => Ok(DepKind::Build),
+                                        _ => Err(anyhow!(
+                                            "Unknown depdendency kind [{}]",
+                                            value.to_owned()
+                                        )),
+                                    }?;
+                                    cur_outdated_dep.kind = Some(dep_kind);
+                                }
+                                5 => {
+                                    cur_outdated_dep.platform = match value {
+                                        "---" => None,
+                                        _ => Some(line.to_owned()),
+                                    };
+                                }
+                                _ => {}
+                            }
                         }
+                        cur_deps.push(OutdatedDep {
+                            name: cur_outdated_dep
+                                .name
+                                .clone()
+                                .ok_or(anyhow!("Parsed data is missing a value for 'name'"))?,
+                            kind: cur_outdated_dep
+                                .kind
+                                .clone()
+                                .ok_or(anyhow!("Parsed data is missing a value for 'kind'"))?,
+                            latest_version: cur_outdated_dep.latest_version.clone().ok_or(
+                                anyhow!("Parsed data is missing a value for 'latest version'"),
+                            )?,
+                            project_version: cur_outdated_dep.project_version.clone().ok_or(
+                                anyhow!("Parsed data is missing a value for 'project version'"),
+                            )?,
+                            platform: cur_outdated_dep.platform.clone(),
+                            latest_compatible_version: cur_outdated_dep
+                                .latest_compatible_version
+                                .clone(),
+                        });
+
+                        Ok(ParseState::InRow)
                     }
                 }
-            };
-            println!("State now \n{:#?}\n\n", &state);
+            }
         }
-        // if cur_outdated_dep.kind.is_none(){
-        //     Err(anyhow!("Parsed data is missing a 'kind'"))
-        // }
-        // if cur_outdated_dep.name.is_none(){
-        //     Err(anyhow!("Parsed data is missing a 'name'"))
-        // }
-        // if cur_outdated_dep.project_version.is_none(){
-        //     Err(anyhow!("Parsed data is missing a 'project version'"))
-        // }
-        // if cur_outdated_dep.latest_version.is_none(){
-        //     Err(anyhow!("Parsed data is missing a 'latest version'"))
-        // }
 
-        deps.push((
-            workspace_name
-                .ok_or(anyhow!(
-                    "Parsed data is missing a value for 'workspace name'"
-                ))?
-                .to_owned(),
-            vec![OutdatedDep {
-                name: cur_outdated_dep
-                    .name
-                    .ok_or(anyhow!("Parsed data is missing a value for 'name'"))?,
-                kind: cur_outdated_dep
-                    .kind
-                    .ok_or(anyhow!("Parsed data is missing a value for 'kind'"))?,
-                latest_version: cur_outdated_dep.latest_version.ok_or(anyhow!(
-                    "Parsed data is missing a value for 'latest version'"
-                ))?,
-                project_version: cur_outdated_dep.project_version.ok_or(anyhow!(
-                    "Parsed data is missing a value for 'project version'"
-                ))?,
-                platform: cur_outdated_dep.platform,
-                latest_compatible_version: cur_outdated_dep.latest_compatible_version,
-            }],
-        ));
-        Ok(OutdatedResult { projects: deps })
+        workspec_deps.push((workspace_name.clone().unwrap(), cur_deps.clone()));
+        // deps.push((
+        //     workspace_name
+        //         .ok_or(anyhow!(
+        //             "Parsed data is missing a value for 'workspace name'"
+        //         ))?
+        //         .to_owned(),
+        //     vec![OutdatedDep {
+        //         name: cur_outdated_dep
+        //             .name
+        //             .ok_or(anyhow!("Parsed data is missing a value for 'name'"))?,
+        //         kind: cur_outdated_dep
+        //             .kind
+        //             .ok_or(anyhow!("Parsed data is missing a value for 'kind'"))?,
+        //         latest_version: cur_outdated_dep.latest_version.ok_or(anyhow!(
+        //             "Parsed data is missing a value for 'latest version'"
+        //         ))?,
+        //         project_version: cur_outdated_dep.project_version.ok_or(anyhow!(
+        //             "Parsed data is missing a value for 'project version'"
+        //         ))?,
+        //         platform: cur_outdated_dep.platform,
+        //         latest_compatible_version: cur_outdated_dep.latest_compatible_version,
+        //     }],
+        // ));
+        Ok(OutdatedResult {
+            projects: workspec_deps,
+        })
     }
+    // if cur_outdated_dep.kind.is_none(){
+    //     Err(anyhow!("Parsed data is missing a 'kind'"))
+    // }
+    // if cur_outdated_dep.name.is_none(){
+    //     Err(anyhow!("Parsed data is missing a 'name'"))
+    // }
+    // if cur_outdated_dep.project_version.is_none(){
+    //     Err(anyhow!("Parsed data is missing a 'project version'"))
+    // }
+    // if cur_outdated_dep.latest_version.is_none(){
+    //     Err(anyhow!("Parsed data is missing a 'latest version'"))
+    // }
 }
 
 #[cfg(test)]
@@ -188,8 +277,8 @@ libgit2-sys  0.8.2    ---     0.12.21+1.1.0  Normal  ---
 
 foo
 ================
-Name         Project  Compat  Latest         Kind    Platform
-----         -------  ------  ------         ----    --------
+Name             Project  Compat  Latest   Kind         Platform
+----             -------  ------  ------   ----         --------
 clap             2.20.0   2.20.5  2.26.0   Normal       ---
 clap->bitflags   0.7.0    ---     0.9.1    Normal       ---
 clap->libc       0.2.18   0.2.29  Removed  Normal       ---
@@ -202,5 +291,6 @@ term             0.4.5    ---     0.4.6    Normal       ---
 term_size->libc  0.2.18   0.2.29  0.2.29   Normal       cfg(not(target_os = "windows")) 
         "#;
         let o = OutdatedResult::try_from(output).unwrap();
+        dbg!(o);
     }
 }
